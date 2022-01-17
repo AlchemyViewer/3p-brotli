@@ -183,6 +183,12 @@ foreach(lib IN LISTS BROTLI_SHARED_LIBS)
   set_target_properties (${lib} PROPERTIES DEFINE_SYMBOL "${LIB}_SHARED_COMPILATION")
 endforeach()
 
+if(MSVC)
+  foreach(lib IN LISTS BROTLI_STATIC_LIBS)
+    target_compile_options(${lib} PUBLIC "/Z7" )
+  endforeach()
+endif()
+
 foreach(lib IN LISTS BROTLI_SHARED_LIBS BROTLI_STATIC_LIBS)
   target_link_libraries(${lib} ${LIBM_LIBRARY})
   set_property(TARGET ${lib} APPEND PROPERTY INCLUDE_DIRECTORIES ${BROTLI_INCLUDE_DIRS})
