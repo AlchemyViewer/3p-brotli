@@ -118,16 +118,16 @@ pushd "$BROTLI_SOURCE_DIR"
                     -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET} \
                     -DCMAKE_OSX_SYSROOT=${SDKROOT} \
                     -DCMAKE_OSX_ARCHITECTURES="x86_64" \
-                    -DCMAKE_MACOSX_RPATH=YES -DCMAKE_INSTALL_PREFIX=$stage
+                    -DCMAKE_MACOSX_RPATH=YES \
+                    -DCMAKE_INSTALL_PREFIX="$stage" \
+                    -DCMAKE_INSTALL_LIBDIR="$stage/lib/debug"
 
-                cmake --build . --config Debug
+                cmake --build . --config Debug --clean-first --target install
 
                 # conditionally run unit tests
                 if [ "${DISABLE_UNIT_TESTS:-0}" = "0" ]; then
                     ctest -C Debug
                 fi
-
-                cp -a bin/Debug/libopenjp2*.a* "${stage}/lib/debug/"
             popd
 
             mkdir -p "build_release"
@@ -153,15 +153,16 @@ pushd "$BROTLI_SOURCE_DIR"
                     -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET} \
                     -DCMAKE_OSX_SYSROOT=${SDKROOT} \
                     -DCMAKE_OSX_ARCHITECTURES="x86_64" \
-                    -DCMAKE_MACOSX_RPATH=YES -DCMAKE_INSTALL_PREFIX=$stage
+                    -DCMAKE_MACOSX_RPATH=YES \
+                    -DCMAKE_INSTALL_PREFIX=$stage \
+                    -DCMAKE_INSTALL_LIBDIR="$stage/lib/release"
 
-                cmake --build . --config Release
+                cmake --build . --config Release --clean-first --target install
 
                 # conditionally run unit tests
                 if [ "${DISABLE_UNIT_TESTS:-0}" = "0" ]; then
                     ctest -C Release
                 fi
-
             popd
         ;;
         linux*)
