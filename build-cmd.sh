@@ -2,32 +2,26 @@
 
 cd "$(dirname "$0")"
 
-# turn on verbose debugging output for parabuild logs.
-exec 4>&1; export BASH_XTRACEFD=4; set -x
-# make errors fatal
-set -e
-# complain about unset env variables
-set -u
-
-if [ -z "$AUTOBUILD" ] ; then 
-    exit 1
-fi
-
-if [ "$OSTYPE" = "cygwin" ] ; then
-    autobuild="$(cygpath -u $AUTOBUILD)"
-else
-    autobuild="$AUTOBUILD"
-fi
-
 top="$(pwd)"
 stage="$(pwd)/stage"
 
 mkdir -p $stage
 
-# Load autobuild provided shell functions and variables
+# load autobuild provided shell functions and variables
+case "$AUTOBUILD_PLATFORM" in
+    windows*)
+        autobuild="$(cygpath -u "$AUTOBUILD")"
+    ;;
+    *)
+        autobuild="$AUTOBUILD"
+    ;;
+esac
 source_environment_tempfile="$stage/source_environment.sh"
 "$autobuild" source_environment > "$source_environment_tempfile"
 . "$source_environment_tempfile"
+
+# remove_cxxstd apply_patch
+source "$(dirname "$AUTOBUILD_VARIABLES_FILE")/functions"
 
 BROTLI_SOURCE_DIR="brotli"
 
@@ -36,7 +30,7 @@ mkdir -p "$stage/lib"/{debug,release}
 mkdir -p "$stage/include/brotli"
 mkdir -p "$stage/LICENSES"
 
-echo "1.0.9" > "${stage}/VERSION.txt"
+echo "1.1.0" > "${stage}/VERSION.txt"
 
 pushd "$BROTLI_SOURCE_DIR"
     case "$AUTOBUILD_PLATFORM" in
@@ -45,202 +39,119 @@ pushd "$BROTLI_SOURCE_DIR"
         windows*)
             load_vsvars
 
-            if [ "$AUTOBUILD_ADDRSIZE" = 32 ]
-            then
-                archflags="/arch:SSE2"
-            else
-                archflags=""
-            fi
+            for arch in sse avx2 arm64 ; do
+                platform_target="x64"
+                if [[ "$arch" == "arm64" ]]; then
+                    platform_target="ARM64"
+                fi
 
-            mkdir -p "build_debug"
-            pushd "build_debug"
-                cmake .. -G "$AUTOBUILD_WIN_CMAKE_GEN" -A "$AUTOBUILD_WIN_VSPLATFORM" \
-                            -DCMAKE_BUILD_TYPE="Debug" \
-                            -DCMAKE_C_FLAGS="$archflags /std:c17 /permissive-" \
-                            -DCMAKE_CXX_FLAGS="$archflags /std:c++17 /permissive-" \
-                            -DCMAKE_INSTALL_PREFIX="$(cygpath -w "$stage")" \
-                            -DCMAKE_INSTALL_LIBDIR="$(cygpath -w "$stage/lib/debug")"
-            
-                cmake --build . --config Debug --clean-first --target install
-            popd
+                mkdir -p "build_debug_$arch"
+                pushd "build_debug_$arch"
+                    opts="$(replace_switch /Zi /Z7 $LL_BUILD_DEBUG)"
+                    if [[ "$arch" == "avx2" ]]; then
+                        opts="$(replace_switch /arch:SSE4.2 /arch:AVX2 $opts)"
+                    elif [[ "$arch" == "arm64" ]]; then
+                        opts="$(remove_switch /arch:SSE4.2 $opts)"
+                    fi
+                    plainopts="$(remove_switch /GR $(remove_cxxstd $opts))"
 
-            mkdir -p "build_release"
-            pushd "build_release"
-                cmake .. -G "$AUTOBUILD_WIN_CMAKE_GEN" -A "$AUTOBUILD_WIN_VSPLATFORM" \
-                            -DCMAKE_BUILD_TYPE="Release" \
-                            -DCMAKE_C_FLAGS="$archflags /std:c17 /permissive-" \
-                            -DCMAKE_CXX_FLAGS="$archflags /std:c++17 /permissive-" \
-                            -DCMAKE_INSTALL_PREFIX="$(cygpath -w "$stage")" \
-                            -DCMAKE_INSTALL_LIBDIR="$(cygpath -w "$stage/lib/release")"
-            
-                cmake --build . --config Release --clean-first --target install
-            popd
+                    cmake .. -G "$AUTOBUILD_WIN_CMAKE_GEN" -A "$platform_target" -DBUILD_SHARED_LIBS=FALSE \
+                                -DCMAKE_CONFIGURATION_TYPES="Debug" \
+                                -DCMAKE_BUILD_TYPE="Debug" \
+                                -DCMAKE_C_FLAGS="$plainopts" \
+                                -DCMAKE_CXX_FLAGS="$opts" \
+                                -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT="Embedded" \
+                                -DCMAKE_INSTALL_PREFIX="$(cygpath -m "$stage")" \
+                                -DCMAKE_INSTALL_LIBDIR="$(cygpath -m "$stage/lib/$arch/debug")"
+                
+                    cmake --build . --config Debug --clean-first --target install
+                popd
+
+                mkdir -p "build_release_$arch"
+                pushd "build_release_$arch"
+                    opts="$(replace_switch /Zi /Z7 $LL_BUILD_RELEASE)"
+                    if [[ "$arch" == "avx2" ]]; then
+                        opts="$(replace_switch /arch:SSE4.2 /arch:AVX2 $opts)"
+                    elif [[ "$arch" == "arm64" ]]; then
+                        opts="$(remove_switch /arch:SSE4.2 $opts)"
+                    fi
+                    plainopts="$(remove_switch /GR $(remove_cxxstd $opts))"
+
+                    cmake .. -G "$AUTOBUILD_WIN_CMAKE_GEN" -A "$platform_target" -DBUILD_SHARED_LIBS=FALSE \
+                                -DCMAKE_CONFIGURATION_TYPES="Release" \
+                                -DCMAKE_BUILD_TYPE="Release" \
+                                -DCMAKE_C_FLAGS="$plainopts" \
+                                -DCMAKE_CXX_FLAGS="$opts" \
+                                -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT="Embedded" \
+                                -DCMAKE_INSTALL_PREFIX="$(cygpath -m "$stage")" \
+                                -DCMAKE_INSTALL_LIBDIR="$(cygpath -m "$stage/lib/$arch/release")"
+                
+                    cmake --build . --config Release --clean-first --target install
+                popd
+            done
         ;;
+        # ------------------------- darwin, darwin64 -------------------------
         darwin*)
-            # Setup osx sdk platform
-            SDKNAME="macosx"
-            export SDKROOT=$(xcodebuild -version -sdk ${SDKNAME} Path)
-            export MACOSX_DEPLOYMENT_TARGET=10.15
+            export MACOSX_DEPLOYMENT_TARGET="$LL_BUILD_DARWIN_DEPLOY_TARGET"
 
-            # Setup build flags
-            ARCH_FLAGS="-arch x86_64"
-            SDK_FLAGS="-mmacosx-version-min=${MACOSX_DEPLOYMENT_TARGET} -isysroot ${SDKROOT}"
-            DEBUG_COMMON_FLAGS="$ARCH_FLAGS $SDK_FLAGS -O0 -g -msse4.2 -fPIC -DPIC"
-            RELEASE_COMMON_FLAGS="$ARCH_FLAGS $SDK_FLAGS -Ofast -ffast-math -g -msse4.2 -fPIC -DPIC -fstack-protector-strong"
-            DEBUG_CFLAGS="$DEBUG_COMMON_FLAGS"
-            RELEASE_CFLAGS="$RELEASE_COMMON_FLAGS"
-            DEBUG_CXXFLAGS="$DEBUG_COMMON_FLAGS -std=c++17"
-            RELEASE_CXXFLAGS="$RELEASE_COMMON_FLAGS -std=c++17"
-            DEBUG_CPPFLAGS="-DPIC"
-            RELEASE_CPPFLAGS="-DPIC"
-            DEBUG_LDFLAGS="$ARCH_FLAGS $SDK_FLAGS -Wl,-headerpad_max_install_names"
-            RELEASE_LDFLAGS="$ARCH_FLAGS $SDK_FLAGS -Wl,-headerpad_max_install_names"
+            for arch in x86_64 arm64 ; do
+                ARCH_ARGS="-arch $arch"
+                cc_opts="${TARGET_OPTS:-$ARCH_ARGS $LL_BUILD_RELEASE}"
+                cc_opts="$(remove_cxxstd $cc_opts)"
+                ld_opts="$ARCH_ARGS"
 
-            mkdir -p "build_debug"
-            pushd "build_debug"
-                CFLAGS="$DEBUG_CFLAGS" \
-                CXXFLAGS="$DEBUG_CXXFLAGS" \
-                CPPFLAGS="$DEBUG_CPPFLAGS" \
-                LDFLAGS="$DEBUG_LDFLAGS" \
-                cmake .. -GXcode -DBUILD_SHARED_LIBS:BOOL=OFF \
-                    -DCMAKE_C_FLAGS="$DEBUG_CFLAGS" \
-                    -DCMAKE_CXX_FLAGS="$DEBUG_CXXFLAGS" \
-                    -DCMAKE_XCODE_ATTRIBUTE_GCC_OPTIMIZATION_LEVEL="0" \
-                    -DCMAKE_XCODE_ATTRIBUTE_GCC_FAST_MATH=NO \
-                    -DCMAKE_XCODE_ATTRIBUTE_GCC_GENERATE_DEBUGGING_SYMBOLS=YES \
-                    -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf \
-                    -DCMAKE_XCODE_ATTRIBUTE_LLVM_LTO=NO \
-                    -DCMAKE_XCODE_ATTRIBUTE_CLANG_X86_VECTOR_INSTRUCTIONS=sse4.2 \
-                    -DCMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LANGUAGE_STANDARD="c++17" \
-                    -DCMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LIBRARY="libc++" \
-                    -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
-                    -DCMAKE_OSX_ARCHITECTURES:STRING=x86_64 \
-                    -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET} \
-                    -DCMAKE_OSX_SYSROOT=${SDKROOT} \
-                    -DCMAKE_OSX_ARCHITECTURES="x86_64" \
-                    -DCMAKE_MACOSX_RPATH=YES \
-                    -DCMAKE_INSTALL_PREFIX="$stage" \
-                    -DCMAKE_INSTALL_LIBDIR="$stage/lib/debug"
-
-                cmake --build . --config Debug --clean-first --target install
-
-                # conditionally run unit tests
-                if [ "${DISABLE_UNIT_TESTS:-0}" = "0" ]; then
-                    ctest -C Debug
-                fi
-            popd
-
-            mkdir -p "build_release"
-            pushd "build_release"
-                CFLAGS="$RELEASE_CFLAGS" \
-                CXXFLAGS="$RELEASE_CXXFLAGS" \
-                CPPFLAGS="$RELEASE_CPPFLAGS" \
-                LDFLAGS="$RELEASE_LDFLAGS" \
-                cmake .. -GXcode -DBUILD_SHARED_LIBS:BOOL=OFF \
-                    -DCMAKE_C_FLAGS="$RELEASE_CFLAGS" \
-                    -DCMAKE_CXX_FLAGS="$RELEASE_CXXFLAGS" \
-                    -DCMAKE_XCODE_ATTRIBUTE_GCC_OPTIMIZATION_LEVEL="fast" \
-                    -DCMAKE_XCODE_ATTRIBUTE_GCC_FAST_MATH=YES \
-                    -DCMAKE_XCODE_ATTRIBUTE_GCC_GENERATE_DEBUGGING_SYMBOLS=YES \
-                    -DCMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT=dwarf \
-                    -DCMAKE_XCODE_ATTRIBUTE_LLVM_LTO=NO \
-                    -DCMAKE_XCODE_ATTRIBUTE_DEAD_CODE_STRIPPING=YES \
-                    -DCMAKE_XCODE_ATTRIBUTE_CLANG_X86_VECTOR_INSTRUCTIONS=sse4.2 \
-                    -DCMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LANGUAGE_STANDARD="c++17" \
-                    -DCMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LIBRARY="libc++" \
-                    -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
-                    -DCMAKE_OSX_ARCHITECTURES:STRING=x86_64 \
-                    -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET} \
-                    -DCMAKE_OSX_SYSROOT=${SDKROOT} \
-                    -DCMAKE_OSX_ARCHITECTURES="x86_64" \
-                    -DCMAKE_MACOSX_RPATH=YES \
-                    -DCMAKE_INSTALL_PREFIX=$stage \
-                    -DCMAKE_INSTALL_LIBDIR="$stage/lib/release"
-
-                cmake --build . --config Release --clean-first --target install
-
-                # conditionally run unit tests
-                if [ "${DISABLE_UNIT_TESTS:-0}" = "0" ]; then
-                    ctest -C Release
-                fi
-            popd
-        ;;
-        linux*)
-            # Linux build environment at Linden comes pre-polluted with stuff that can
-            # seriously damage 3rd-party builds.  Environmental garbage you can expect
-            # includes:
-            #
-            #    DISTCC_POTENTIAL_HOSTS     arch           root        CXXFLAGS
-            #    DISTCC_LOCATION            top            branch      CC
-            #    DISTCC_HOSTS               build_name     suffix      CXX
-            #    LSDISTCC_ARGS              repo           prefix      CFLAGS
-            #    cxx_version                AUTOBUILD      SIGN        CPPFLAGS
-            #
-            # So, clear out bits that shouldn't affect our configure-directed build
-            # but which do nonetheless.
-            #
-            unset DISTCC_HOSTS CFLAGS CPPFLAGS CXXFLAGS
-        
-            # Default target per --address-size
-            opts="${TARGET_OPTS:--m$AUTOBUILD_ADDRSIZE}"
-            SIMD_FLAGS="-msse -msse2 -msse3 -mssse3 -msse4 -msse4.1 -msse4.2 -mcx16 -mpopcnt -mpclmul -maes"
-            DEBUG_COMMON_FLAGS="$opts -Og -g -fPIC -DPIC $SIMD_FLAGS"
-            RELEASE_COMMON_FLAGS="$opts -O3 -ffast-math -g -fPIC -DPIC -fstack-protector-strong -D_FORTIFY_SOURCE=2 $SIMD_FLAGS"
-            DEBUG_CFLAGS="$DEBUG_COMMON_FLAGS"
-            RELEASE_CFLAGS="$RELEASE_COMMON_FLAGS"
-            DEBUG_CXXFLAGS="$DEBUG_COMMON_FLAGS -std=c++17"
-            RELEASE_CXXFLAGS="$RELEASE_COMMON_FLAGS -std=c++17"
-            DEBUG_CPPFLAGS="-DPIC"
-            RELEASE_CPPFLAGS="-DPIC -D_FORTIFY_SOURCE=2"
- 
-            # Handle any deliberate platform targeting
-            if [ -z "${TARGET_CPPFLAGS:-}" ]; then
-                # Remove sysroot contamination from build environment
-                unset CPPFLAGS
-            else
-                # Incorporate special pre-processing flags
-                export CPPFLAGS="$TARGET_CPPFLAGS"
-            fi
-
-            # Debug
-            mkdir -p "build_debug"
-            pushd "build_debug"
-                CFLAGS="$DEBUG_CFLAGS" \
-                CXXFLAGS="$DEBUG_CXXFLAGS" \
-                CPPFLAGS="$DEBUG_CPPFLAGS" \
-                    cmake ../ -G"Ninja" \
-                        -DCMAKE_BUILD_TYPE=Debug \
-                        -DCMAKE_C_FLAGS="$DEBUG_CFLAGS" \
-                        -DCMAKE_CXX_FLAGS="$DEBUG_CXXFLAGS" \
-                        -DCMAKE_INSTALL_PREFIX="$stage/install_debug"
-
-                cmake --build . --config Debug --parallel $AUTOBUILD_CPU_COUNT -v
-                cmake --install . --config Debug
-
-                mkdir -p ${stage}/lib/debug
-                mv ${stage}/install_debug/lib/*.so* ${stage}/lib/debug
-                mv ${stage}/install_debug/lib/*.a* ${stage}/lib/debug
-            popd
-
-            # Release
-            mkdir -p "build_release"
-            pushd "build_release"
-                CFLAGS="$RELEASE_CFLAGS" \
-                CXXFLAGS="$RELEASE_CXXFLAGS" \
-                CPPFLAGS="$RELEASE_CPPFLAGS" \
-                    cmake ../ -G"Ninja" \
-                        -DCMAKE_BUILD_TYPE=Release \
+                mkdir -p "build_$arch"
+                pushd "build_$arch"
+                    CFLAGS="$cc_opts" \
+                    LDFLAGS="$ld_opts" \
+                    cmake .. -GXcode -DBUILD_SHARED_LIBS:BOOL=OFF \
                         -DCMAKE_C_FLAGS="$RELEASE_CFLAGS" \
                         -DCMAKE_CXX_FLAGS="$RELEASE_CXXFLAGS" \
-                        -DCMAKE_INSTALL_PREFIX="$stage/install_release"
+                        -DCMAKE_OSX_ARCHITECTURES:STRING=x86_64 \
+                        -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET} \
+                        -DCMAKE_OSX_ARCHITECTURES="$arch" \
+                        -DCMAKE_INSTALL_PREFIX=$stage \
+                        -DCMAKE_INSTALL_LIBDIR="$stage/lib/$arch/release"
 
-                cmake --build . --config Release --parallel $AUTOBUILD_CPU_COUNT
-                cmake --install . --config Release
+                    cmake --build . --config Release --clean-first --target install
 
-                mkdir -p ${stage}/lib/release
-                mv ${stage}/install_release/lib/*.so* ${stage}/lib/release
-                mv ${stage}/install_release/lib/*.a* ${stage}/lib/release
-            popd
+                    # conditionally run unit tests
+                    if [ "${DISABLE_UNIT_TESTS:-0}" = "0" ]; then
+                        ctest -C Release
+                    fi
+                popd
+            done
+
+            lipo -create -output "$stage/lib/release/libbrotlienc.a" "$stage/lib/x86_64/release/libbrotlienc.a" "$stage/lib/arm64/release/libbrotlienc.a"
+            lipo -create -output "$stage/lib/release/libbrotlidec.a" "$stage/lib/x86_64/release/libbrotlidec.a" "$stage/lib/arm64/release/libbrotlidec.a"
+            lipo -create -output "$stage/lib/release/libbrotlicommon.a" "$stage/lib/x86_64/release/libbrotlicommon.a" "$stage/lib/arm64/release/libbrotlicommon.a"
+        ;;
+        linux*)
+            for arch in sse avx2 ; do
+                # Default target per autobuild build --address-size
+                opts="${TARGET_OPTS:--m$AUTOBUILD_ADDRSIZE $LL_BUILD_RELEASE}"
+                if [[ "$arch" == "avx2" ]]; then
+                    opts="$(replace_switch -march=x86-64-v2 -march=x86-64-v3 $opts)"
+                fi
+                plainopts="$(remove_cxxstd $opts)"
+
+                # Release
+                mkdir -p "build_$arch"
+                pushd "build_$arch"
+                    CFLAGS="$plainopts" \
+                    CXXFLAGS="$opts" \
+                        cmake ../ -G"Ninja" -DBUILD_SHARED_LIBS:BOOL=OFF \
+                            -DCMAKE_BUILD_TYPE=Release \
+                            -DCMAKE_C_FLAGS="$plainopts" \
+                            -DCMAKE_CXX_FLAGS="$opts" \
+                            -DCMAKE_INSTALL_PREFIX=$stage \
+                            -DCMAKE_INSTALL_LIBDIR="$stage/lib/$arch/release"
+
+
+                    cmake --build . --config Release --parallel $AUTOBUILD_CPU_COUNT
+                    cmake --install . --config Release
+                popd
+            done
         ;;
     esac
     mkdir -p "$stage/LICENSES"

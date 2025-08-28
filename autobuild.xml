@@ -23,7 +23,7 @@
           <string>stage</string>
           <key>configurations</key>
           <map>
-            <key>Release</key>
+            <key>default</key>
             <map>
               <key>build</key>
               <map>
@@ -36,7 +36,7 @@
                 <string>bash</string>
               </map>
               <key>name</key>
-              <string>Release</string>
+              <string>default</string>
             </map>
           </map>
           <key>manifest</key>
@@ -51,7 +51,7 @@
         <map>
           <key>configurations</key>
           <map>
-            <key>Release</key>
+            <key>default</key>
             <map>
               <key>build</key>
               <map>
@@ -59,12 +59,11 @@
               <key>default</key>
               <boolean>true</boolean>
               <key>name</key>
-              <string>Release</string>
+              <string>default</string>
             </map>
           </map>
           <key>manifest</key>
           <array>
-            <string>lib/debug/*.a</string>
             <string>lib/release/*.a</string>
           </array>
           <key>name</key>
@@ -74,7 +73,7 @@
         <map>
           <key>configurations</key>
           <map>
-            <key>Release</key>
+            <key>default</key>
             <map>
               <key>build</key>
               <map>
@@ -82,13 +81,13 @@
               <key>default</key>
               <boolean>true</boolean>
               <key>name</key>
-              <string>Release</string>
+              <string>default</string>
             </map>
           </map>
           <key>manifest</key>
           <array>
-            <string>lib/debug/*.a</string>
-            <string>lib/release/*.a</string>
+            <string>lib/sse/release/*.a</string>
+            <string>lib/avx2/release/*.a</string>
           </array>
           <key>name</key>
           <string>linux</string>
@@ -97,7 +96,7 @@
         <map>
           <key>configurations</key>
           <map>
-            <key>Release</key>
+            <key>default</key>
             <map>
               <key>build</key>
               <map>
@@ -105,20 +104,22 @@
               <key>default</key>
               <boolean>true</boolean>
               <key>name</key>
-              <string>Release</string>
+              <string>default</string>
             </map>
           </map>
           <key>manifest</key>
           <array>
-            <string>lib/debug/*-static.lib</string>
-            <string>lib/release/*-static.lib</string>
+            <string>lib/sse/debug/*.lib</string>
+            <string>lib/avx2/debug/*.lib</string>
+            <string>lib/arm64/debug/*.lib</string>
+            <string>lib/sse/release/*.lib</string>
+            <string>lib/avx2/release/*.lib</string>
+            <string>lib/arm64/release/*.lib</string>
           </array>
           <key>name</key>
           <string>windows</string>
         </map>
       </map>
-      <key>source_directory</key>
-      <string>brotli</string>
       <key>version_file</key>
       <string>VERSION.txt</string>
     </map>
